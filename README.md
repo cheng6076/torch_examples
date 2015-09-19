@@ -1,2 +1,2 @@
 #torch examples
-this is just examples for test, please do not use
+This are just some examples for test, please do not use
