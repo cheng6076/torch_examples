@@ -29,8 +29,6 @@ cmd:text('Options')
 cmd:option('-data_dir','data/ptb','data directory. Should contain train.txt/valid.txt/test.txt with input data')
 -- model params
 cmd:option('-rnn_size', 650, 'size of LSTM internal state')
-cmd:option('-use_words', 0, 'use words (1=yes)')
-cmd:option('-use_chars', 1, 'use characters (1=yes)')
 cmd:option('-highway_layers', 2, 'number of highway layers')
 cmd:option('-word_vec_size', 650, 'dimensionality of word embeddings')
 cmd:option('-char_vec_size', 15, 'dimensionality of character embeddings')
@@ -69,9 +67,6 @@ cmd:text()
 opt = cmd:parse(arg)
 torch.manualSeed(opt.seed)
 
-assert(opt.use_words == 1 or opt.use_words == 0, '-use_words has to be 0 or 1')
-assert(opt.use_chars == 1 or opt.use_chars == 0, '-use_chars has to be 0 or 1')
-assert((opt.use_chars + opt.use_words) > 0, 'has to use at least one of words or chars')
 
 --if opt.threads > 0 then
 --    torch.setnumthreads(opt.threads)
@@ -169,7 +164,7 @@ if retrain then
 else
     protos.rnn = LSTMTDNN.lstmtdnn(opt.rnn_size, opt.num_layers, opt.dropout, #loader.idx2word, 
 				opt.word_vec_size, #loader.idx2char, opt.char_vec_size, opt.feature_maps, 
-				opt.kernels, loader.max_word_l, opt.use_words, opt.use_chars, opt.batch_norm,opt.highway_layers, opt.hsm)
+				opt.kernels, loader.max_word_l, opt.batch_norm,opt.highway_layers, opt.hsm)
     -- training criterion (negative log likelihood)
     if opt.hsm > 0 then
         protos.criterion = nn.HLogSoftMax(mapping, opt.rnn_size)
@@ -213,9 +208,7 @@ end
 function get_layer(layer)
     local tn = torch.typename(layer)
     if layer.name ~= nil then
-        if layer.name == 'word_vecs' then
-	    word_vecs = layer
-	elseif layer.name == 'char_vecs' then
+	if layer.name == 'char_vecs' then
 	    char_vecs = layer
 	elseif layer.name == 'cnn' then
 	    cnn = layer
@@ -235,8 +228,7 @@ end
 -- for easy switch between using words/chars (or both)
 function get_input(x, x_char, t, prev_states)
     local u = {}
-    if opt.use_chars == 1 then table.insert(u, x_char[{{},t}]) end
-    if opt.use_words == 1 then table.insert(u, x[{{},t}]) end
+    table.insert(u, x_char[{{},t}])
     for i = 1, #prev_states do table.insert(u, prev_states[i]) end
     return u
 end
@@ -346,7 +338,7 @@ function feval(x)
 	table.insert(rnn_state[t-1], drnn_state[t])
         local dlst = clones.rnn[t]:backward(get_input(x, x_char, t, rnn_state[t-1]), drnn_state[t])
         drnn_state[t-1] = {}
-	local tmp = opt.use_words + opt.use_chars -- not the safest way but quick
+	local tmp = 1 -- not the safest way but quick
         for k,v in pairs(dlst) do
             if k > tmp then -- k == 1 is gradient on x, which we dont need
                 -- note we do k-1 because first item is dembeddings, and then follow the 
