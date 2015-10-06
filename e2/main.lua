@@ -225,8 +225,8 @@ for name,proto in pairs(protos) do
     clones[name] = model_utils.clone_many_times(proto, opt.seq_length, not proto.parameters)
 end
 
--- for easy switch between using words/chars (or both)
-function get_input(x, x_char, t, prev_states)
+-- this returns chars at time t, previous c, previous h
+function get_input(x_char, t, prev_states)
     local u = {}
     table.insert(u, x_char[{{},t}])
     for i = 1, #prev_states do table.insert(u, prev_states[i]) end
@@ -259,7 +259,7 @@ function eval_split(split_idx, max_batches)
 	    -- forward pass
 	    for t=1,opt.seq_length do
 		clones.rnn[t]:evaluate() -- for dropout proper functioning
-		local lst = clones.rnn[t]:forward(get_input(x, x_char, t, rnn_state[t-1]))
+		local lst = clones.rnn[t]:forward(get_input(x_char, t, rnn_state[t-1]))
 		rnn_state[t] = {}
 		for i=1,#init_state do 
                     table.insert(rnn_state[t], lst[i])
@@ -281,7 +281,7 @@ function eval_split(split_idx, max_batches)
 	end
 	protos.rnn:evaluate() -- just need one clone
 	for t = 1, x:size(2) do
-	    local lst = protos.rnn:forward(get_input(x, x_char, t, rnn_state[0]))
+	    local lst = protos.rnn:forward(get_input(x_char, t, rnn_state[0]))
 	    rnn_state[0] = {}
 	    for i=1,#init_state do table.insert(rnn_state[0], lst[i]) end
 	    prediction = lst[#lst] 
@@ -319,7 +319,7 @@ function feval(x)
     local loss = 0
     for t=1,opt.seq_length do
         clones.rnn[t]:training() -- make sure we are in correct mode (this is cheap, sets flag)        
-        local lst = clones.rnn[t]:forward(get_input(x, x_char, t, rnn_state[t-1]))
+        local lst = clones.rnn[t]:forward(get_input(x_char, t, rnn_state[t-1]))
         rnn_state[t] = {}
         for i=1,#init_state do 
             table.insert(rnn_state[t], lst[i]) 
@@ -336,7 +336,7 @@ function feval(x)
         local doutput_t = clones.criterion[t]:backward(predictions[t], y[{{}, t}])
         table.insert(drnn_state[t], doutput_t)
 	table.insert(rnn_state[t-1], drnn_state[t])
-        local dlst = clones.rnn[t]:backward(get_input(x, x_char, t, rnn_state[t-1]), drnn_state[t])
+        local dlst = clones.rnn[t]:backward(get_input(x_char, t, rnn_state[t-1]), drnn_state[t])
         drnn_state[t-1] = {}
 	local tmp = 1 -- not the safest way but quick
         for k,v in pairs(dlst) do
