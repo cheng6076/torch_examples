@@ -37,7 +37,6 @@ cmd:option('-kernels', '{1,2,3,4,5,6,7}', 'conv net kernel widths')
 cmd:option('-num_layers', 2, 'number of layers in the LSTM')
 cmd:option('-dropout',0.5,'dropout. 0 = no dropout')
 -- optimization
-cmd:option('-hsm',0,'number of clusters to use for hsm. 0 = normal softmax, -1 = use sqrt(|V|)')
 cmd:option('-learning_rate',1,'starting learning rate')
 cmd:option('-learning_rate_decay',0.5,'learning rate decay')
 cmd:option('-decay_when',1,'decay if validation perplexity does not improve by more than this much')
@@ -106,42 +105,8 @@ print('Word vocab size: ' .. #loader.idx2word .. ', Char vocab size: ' .. #loade
 	    .. ', Max word length (incl. padding): ', loader.max_word_l)
 opt.max_word_l = loader.max_word_l
 
--- if number of clusters is not explicitly provided
-if opt.hsm == -1 then
-    opt.hsm = torch.round(torch.sqrt(#loader.idx2word))
-end
 
-if opt.hsm > 0 then
-    -- partition into opt.hsm clusters
-    -- we want roughly equal number of words in each cluster
-    HSMClass = require 'util.HSMClass'
-    require 'util.HLogSoftMax'
-    mapping = torch.LongTensor(#loader.idx2word, 2):zero()
-    local n_in_each_cluster = #loader.idx2word / opt.hsm
-    local _, idx = torch.sort(torch.randn(#loader.idx2word), 1, true)   
-    local n_in_cluster = {} --number of tokens in each cluster
-    local c = 1
-    for i = 1, idx:size(1) do
-        local word_idx = idx[i] 
-        if n_in_cluster[c] == nil then
-            n_in_cluster[c] = 1
-        else
-            n_in_cluster[c] = n_in_cluster[c] + 1
-        end
-        mapping[word_idx][1] = c
-        mapping[word_idx][2] = n_in_cluster[c]        
-        if n_in_cluster[c] >= n_in_each_cluster then
-            c = c+1
-        end
-        if c > opt.hsm then --take care of some corner cases
-            c = opt.hsm
-        end
-    end
-    print(string.format('using hierarchical softmax with %d classes', opt.hsm))
-end
-
-
--- load model objects. we do this here because of cudnn and hsm options
+-- load model objects. we do this here because of cudnn options
 TDNN = require 'model.TDNN'
 LSTMTDNN = require 'model.LSTMTDNN'
 HighwayMLP = require 'model.HighwayMLP'
@@ -164,18 +129,14 @@ if retrain then
 else
     protos.rnn = LSTMTDNN.lstmtdnn(opt.rnn_size, opt.num_layers, opt.dropout, #loader.idx2word, 
 				opt.word_vec_size, #loader.idx2char, opt.char_vec_size, opt.feature_maps, 
-				opt.kernels, loader.max_word_l, opt.batch_norm,opt.highway_layers, opt.hsm)
+				opt.kernels, loader.max_word_l, opt.batch_norm,opt.highway_layers)
     
     local d = nn.Identity()()
     local s = nn.Identity()()
     local score = nn.Sigmoid()(nn.CAddTable()({nn.Linear(opt.rnn_size, 1)(d),nn.Linear(opt.rnn_size, 1)(s)}))
     protos.extractor = nn.gModule({d,s}, {score})
     -- training criterion (negative log likelihood)
-    if opt.hsm > 0 then
-        protos.criterion = nn.HLogSoftMax(mapping, opt.rnn_size)
-    else
-        protos.criterion = nn.ClassNLLCriterion()
-    end
+    protos.criterion = nn.ClassNLLCriterion()
 end
 
 -- the initial state of the cell/hidden states
@@ -194,14 +155,7 @@ end
 
 -- put the above things into one flattened parameters tensor
 params, grad_params = model_utils.combine_all_parameters(protos.rnn)
--- hsm has its own params
-if opt.hsm > 0 then
-    hsm_params, hsm_grad_params = protos.criterion:getParameters()
-    hsm_params:uniform(-opt.param_init, opt.param_init)
-    print('number of parameters in the model: ' .. params:nElement() + hsm_params:nElement())
-else
-    print('number of parameters in the model: ' .. params:nElement())
-end
+print('number of parameters in the model: ' .. params:nElement())
 
 -- initialization
 if not retrain then
@@ -242,9 +196,6 @@ end
 function eval_split(split_idx, max_batches)
     print('evaluating loss over split index ' .. split_idx)
     local n = loader.split_sizes[split_idx]
-    if opt.hsm > 0 then
-        protos.criterion:change_bias()
-    end
 
     if max_batches ~= nil then n = math.min(max_batches, n) end
 
@@ -307,9 +258,6 @@ function feval(x)
         params:copy(x)
     end
     grad_params:zero()
-    if opt.hsm > 0 then
-        hsm_grad_params:zero()
-    end
     ------------------ get minibatch -------------------
     local x, y, x_char = loader:next_batch(1) --from train
     if opt.gpuid >= 0 then -- ship the input arrays to GPU
@@ -359,22 +307,12 @@ function feval(x)
     
     -- renormalize gradients
     local grad_norm, shrink_factor
-    if opt.hsm==0 then
-        grad_norm = grad_params:norm()
-    else
-        grad_norm = torch.sqrt(grad_params:norm()^2 + hsm_grad_params:norm()^2)
-    end
+    grad_norm = grad_params:norm()
     if grad_norm > opt.max_grad_norm then
         shrink_factor = opt.max_grad_norm / grad_norm
         grad_params:mul(shrink_factor)
-        if opt.hsm > 0 then
-            hsm_grad_params:mul(shrink_factor)
-        end
     end    
     params:add(grad_params:mul(-lr)) -- update params
-    if opt.hsm > 0 then
-        hsm_params:add(hsm_grad_params:mul(-lr))
-    end
     return torch.exp(loss)
 end
 

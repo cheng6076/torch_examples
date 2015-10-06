@@ -8,7 +8,7 @@ else
 end
 
 function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size, char_vocab_size, char_vec_size,
-	 			     feature_maps, kernels, length, batch_norm, highway_layers, hsm)
+	 			     feature_maps, kernels, length, batch_norm, highway_layers)
     -- rnn_size = dimensionality of hidden layers
     -- n = number of layers
     -- dropout = dropout probability
@@ -96,13 +96,9 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
         top_h = nn.Identity()(top_h) --to be compatiable with dropout=0 and hsm>1
     end
 
-    if hsm > 0 then -- if HSM is used then softmax will be done later
-        table.insert(outputs, top_h)
-    else
-        local proj = nn.Linear(rnn_size, word_vocab_size)(top_h)
-        local logsoft = nn.LogSoftMax()(proj)
-        table.insert(outputs, logsoft)
-    end
+    local proj = nn.Linear(rnn_size, word_vocab_size)(top_h)
+    local logsoft = nn.LogSoftMax()(proj)
+    table.insert(outputs, logsoft)
     return nn.gModule(inputs, outputs)
 end
 
