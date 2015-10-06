@@ -1,4 +1,4 @@
-## Character-Aware Neural Language Models
+## Modified Character-Aware Neural Language Models (originally written by Yoon Kim)
 Code for the paper [Character-Aware Neural Language Models](http://arxiv.org/abs/1508.06615).
 
 A neural language model (NLM) built on character inputs only. Predictions
