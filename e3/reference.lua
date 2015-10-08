@@ -253,7 +253,7 @@ function eval_split(split_idx, max_batches)
 end
 
 -- do fwd/bwd and return loss, grad_params
-
+tape = autobw.Tape()
 local init_state_global = clone_list(init_state)
 function feval(x)
     if x ~= params then
@@ -261,9 +261,7 @@ function feval(x)
     end
     grad_params:zero()
     ------------------ get minibatch -------------------
-
     local x, y, x_char = loader:next_batch(1) --from train
-
     if opt.gpuid >= 0 then -- ship the input arrays to GPU
         -- have to convert to float because integers can't be cuda()'d
         x = x:float():cuda()
@@ -271,46 +269,44 @@ function feval(x)
 	x_char = x_char:float():cuda()
     end
     ------------------- forward pass -------------------
-
-    local rnn_state = {[0] = init_state_global} --seems zero index does not count for the table length?
+    tape:begin()
+    local rnn_state = {[0] = init_state_global}
     local predictions = {}           -- softmax outputs
     local loss = 0
     for t=1,opt.seq_length do
         clones.rnn[t]:training() -- make sure we are in correct mode (this is cheap, sets flag)        
         local lst = clones.rnn[t]:forward(get_input(x_char, t, rnn_state[t-1]))
         rnn_state[t] = {}
-        for i=1,#init_state do
+        for i=1,#init_state do 
             table.insert(rnn_state[t], lst[i]) 
         end -- extract the state, without output
         predictions[t] = lst[#lst] -- last element is the prediction
         loss = loss + clones.criterion[t]:forward(predictions[t], y[{{}, t}])
     end
     loss = loss / opt.seq_length
-
+    tape:stop()
     ------------------ backward pass -------------------
     -- initialize gradient at time t to be zeros (there's no influence from future)
-
+    tape:backward()
+    --[=====[
     local drnn_state = {[opt.seq_length] = clone_list(init_state, true)} -- true also zeros the clones
     for t=opt.seq_length,1,-1 do
         -- backprop through loss, and softmax/linear
         local doutput_t = clones.criterion[t]:backward(predictions[t], y[{{}, t}])
-
         table.insert(drnn_state[t], doutput_t)
-
-	    table.insert(rnn_state[t-1], drnn_state[t])
+	table.insert(rnn_state[t-1], drnn_state[t])
         local dlst = clones.rnn[t]:backward(get_input(x_char, t, rnn_state[t-1]), drnn_state[t])
-        print (dlst)
         drnn_state[t-1] = {}
-
+	local tmp = 1 -- not the safest way but quick
         for k,v in pairs(dlst) do
-            if k > 1 then -- k == 1 is gradient on x, which we dont need
+            if k > tmp then -- k == 1 is gradient on x, which we dont need
                 -- note we do k-1 because first item is dembeddings, and then follow the 
                 -- derivatives of the state, starting at index 2. I know...
-                drnn_state[t-1][k-1] = v
+                drnn_state[t-1][k-tmp] = v
             end
         end	
     end
-
+    --]=====]
     ------------------------ misc ----------------------
     -- transfer final state to initial state (BPTT)
     init_state_global = rnn_state[#rnn_state] -- NOTE: I don't think this needs to be a clone, right?

@@ -15,15 +15,12 @@ require 'lfs'
 require 'util.Squeeze'
 require 'util.misc'
 require 'autobw'
-
 BatchLoader = require 'util.BatchLoaderUnk'
 model_utils = require 'util.model_utils'
 
 local stringx = require('pl.stringx')
 
 cmd = torch.CmdLine()
-cmd:text()
-cmd:text('Train a word+character-level language model')
 cmd:text()
 cmd:text('Options')
 -- data
@@ -35,7 +32,7 @@ cmd:option('-word_vec_size', 650, 'dimensionality of word embeddings')
 cmd:option('-char_vec_size', 15, 'dimensionality of character embeddings')
 cmd:option('-feature_maps', '{50,100,150,200,200,200,200}', 'number of feature maps in the CNN')
 cmd:option('-kernels', '{1,2,3,4,5,6,7}', 'conv net kernel widths')
-cmd:option('-num_layers', 2, 'number of layers in the LSTM')
+cmd:option('-num_layers', 1, 'number of layers in the LSTM')
 cmd:option('-dropout',0.5,'dropout. 0 = no dropout')
 -- optimization
 cmd:option('-learning_rate',1,'starting learning rate')
@@ -130,12 +127,13 @@ if retrain then
 else
     protos.rnn = LSTMTDNN.lstmtdnn(opt.rnn_size, opt.num_layers, opt.dropout, #loader.idx2word, 
 				opt.word_vec_size, #loader.idx2char, opt.char_vec_size, opt.feature_maps, 
-				opt.kernels, loader.max_word_l, opt.batch_norm,opt.highway_layers)
-    
+				opt.kernels, loader.max_word_l, opt.batch_norm, opt.highway_layers)
+    print (opt.rnn_size)    
     local d = nn.Identity()()
     local s = nn.Identity()()
-    local score = nn.Sigmoid()(nn.CAddTable()({nn.Linear(opt.rnn_size, 1)(d),nn.Linear(opt.rnn_size, 1)(s)}))
-    protos.extractor = nn.gModule({d,s}, {score})
+    local score = nn.CAddTable()({nn.Linear(opt.rnn_size, 2)(d),nn.Linear(opt.rnn_size, 2)(s)})
+    local logsoft = nn.LogSoftMax()(score)
+    protos.extractor = nn.gModule({d,s},{logsoft})
     -- training criterion (negative log likelihood)
     protos.criterion = nn.ClassNLLCriterion()
 end
@@ -178,7 +176,7 @@ end
 protos.rnn:apply(get_layer)
 
 -- make a bunch of clones after flattening, as that reallocates memory
--- not really sure how this part works
+-- perhaps this is because we want to keep the output at every timestep?
 clones = {}
 for name,proto in pairs(protos) do
     print('cloning ' .. name)
@@ -218,13 +216,20 @@ function eval_split(split_idx, max_batches)
 		clones.rnn[t]:evaluate() -- for dropout proper functioning
 		local lst = clones.rnn[t]:forward(get_input(x_char, t, rnn_state[t-1]))
 		rnn_state[t] = {}
-		for i=1,#init_state do 
+		        for i=1,#init_state do
                     table.insert(rnn_state[t], lst[i])
                 end
-		prediction = lst[#lst]
-                loss = loss + clones.criterion[t]:forward(prediction, y[{{}, t}])
 	    end
-	    -- carry over lstm state
+            local dvec = rnn_state[opt.seq_length][#init_state]
+
+
+            for t=1,opt.seq_length do
+                prediction = clones.extractor[t]:forward({dvec, rnn_state[t][#init_state]})  --the last state is h
+                print (prediction)
+                loss = loss + clones.criterion[t]:forward(prediction, y[{{}, t}])
+            end
+             
+	    -- carry over lstm state, just for language model
 	    rnn_state[0] = rnn_state[#rnn_state]
 	end
 	loss = loss / opt.seq_length / n
@@ -241,7 +246,8 @@ function eval_split(split_idx, max_batches)
 	    local lst = protos.rnn:forward(get_input(x_char, t, rnn_state[0]))
 	    rnn_state[0] = {}
 	    for i=1,#init_state do table.insert(rnn_state[0], lst[i]) end
-	    prediction = lst[#lst] 
+	    local dvec = rnn_state[0][#init_state]
+            prediction = protos.extractor:forward({dvec, rnn_state[0][#init_state]})
             local tok_perp
             tok_perp = protos.criterion:forward(prediction, y[{{},t}])
             loss = loss + tok_perp
@@ -253,8 +259,8 @@ function eval_split(split_idx, max_batches)
 end
 
 -- do fwd/bwd and return loss, grad_params
-
 local init_state_global = clone_list(init_state)
+
 function feval(x)
     if x ~= params then
         params:copy(x)
@@ -272,36 +278,48 @@ function feval(x)
     end
     ------------------- forward pass -------------------
 
-    local rnn_state = {[0] = init_state_global} --seems zero index does not count for the table length?
+    local rnn_state = {[0] = init_state_global}
+    local hvecs = {}
     local predictions = {}           -- softmax outputs
     local loss = 0
+
     for t=1,opt.seq_length do
         clones.rnn[t]:training() -- make sure we are in correct mode (this is cheap, sets flag)        
         local lst = clones.rnn[t]:forward(get_input(x_char, t, rnn_state[t-1]))
         rnn_state[t] = {}
-        for i=1,#init_state do
-            table.insert(rnn_state[t], lst[i]) 
+        for i=1,#init_state do 
+            table.insert(rnn_state[t], lst[i])
         end -- extract the state, without output
-        predictions[t] = lst[#lst] -- last element is the prediction
+
+        table.insert(hvecs, rnn_state[t][#init_state])
+    end
+
+    local document = rnn_state[opt.seq_length][#init_state]:clone() -- last h
+
+    for t=1,opt.seq_length do
+        -- is clones really necessary here?
+        predictions[t] = clones.extractor[t]:forward({document, hvecs[t]})
         loss = loss + clones.criterion[t]:forward(predictions[t], y[{{}, t}])
     end
+
     loss = loss / opt.seq_length
+
 
     ------------------ backward pass -------------------
     -- initialize gradient at time t to be zeros (there's no influence from future)
 
     local drnn_state = {[opt.seq_length] = clone_list(init_state, true)} -- true also zeros the clones
+
+
     for t=opt.seq_length,1,-1 do
-        -- backprop through loss, and softmax/linear
         local doutput_t = clones.criterion[t]:backward(predictions[t], y[{{}, t}])
-
-        table.insert(drnn_state[t], doutput_t)
-
-	    table.insert(rnn_state[t-1], drnn_state[t])
-        local dlst = clones.rnn[t]:backward(get_input(x_char, t, rnn_state[t-1]), drnn_state[t])
-        print (dlst)
+        --print (doutput_t)
+        local dhvec_t = clones.extractor[t]:backward(hvecs[t] ,doutput_t) -- this will create two values,since we used CAddTable!
+        --print (dhvec_t)
+        table.insert(drnn_state[t], dhvec_t[1]:add(dhvec_t[2]))
+        local dlst = clones.rnn[t]:backward({x_char[{{},t}], unpack(rnn_state[t-1])}, drnn_state[t])
+        --print (dlst)
         drnn_state[t-1] = {}
-
         for k,v in pairs(dlst) do
             if k > 1 then -- k == 1 is gradient on x, which we dont need
                 -- note we do k-1 because first item is dembeddings, and then follow the 
@@ -323,7 +341,7 @@ function feval(x)
         grad_params:mul(shrink_factor)
     end    
     params:add(grad_params:mul(-lr)) -- update params
-    return torch.exp(loss)
+    return loss
 end
 
 
@@ -334,11 +352,10 @@ lr = opt.learning_rate -- starting learning rate which will be decayed
 local iterations = opt.max_epochs * loader.split_sizes[1]
 if char_vecs ~= nil then char_vecs.weight[1]:zero() end -- zero-padding vector is always zero
 for i = 1, iterations do
-    local epoch = i / loader.split_sizes[1]
 
+    local epoch = i / loader.split_sizes[1]
     local timer = torch.Timer()
     local time = timer:time().real
-    
     train_loss = feval(params) -- fwd/backprop and update params
     if char_vecs ~= nil then -- zero-padding vector is always zero
         char_vecs.weight[1]:zero() 
@@ -348,6 +365,7 @@ for i = 1, iterations do
 
     -- every now and then or on last iteration
     if i % loader.split_sizes[1] == 0 then
+        print ('evaluate')
         -- evaluate loss on validation data
         local val_loss = eval_split(2) -- 2 = validation
         val_losses[#val_losses+1] = val_loss
@@ -361,7 +379,7 @@ for i = 1, iterations do
         checkpoint.i = i
         checkpoint.epoch = epoch
         checkpoint.vocab = {loader.idx2word, loader.word2idx, loader.idx2char, loader.char2idx}
-	checkpoint.lr = lr
+	    checkpoint.lr = lr
         print('saving checkpoint to ' .. savefile)
         if epoch == opt.max_epochs or epoch % opt.save_every == 0 then
             torch.save(savefile, checkpoint)
