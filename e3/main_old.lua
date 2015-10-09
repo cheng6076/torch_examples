@@ -27,7 +27,7 @@ cmd:text('Options')
 cmd:option('-data_dir','data/ptb','data directory. Should contain train.txt/valid.txt/test.txt with input data')
 -- model params
 cmd:option('-rnn_size', 650, 'size of LSTM internal state')
-cmd:option('-highway_layers', 2, 'number of highway layers')
+cmd:option('-highway_layers', 0, 'number of highway layers')
 cmd:option('-word_vec_size', 650, 'dimensionality of word embeddings')
 cmd:option('-char_vec_size', 15, 'dimensionality of character embeddings')
 cmd:option('-feature_maps', '{50,100,150,200,200,200,200}', 'number of feature maps in the CNN')
