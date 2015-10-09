@@ -222,10 +222,8 @@ function eval_split(split_idx, max_batches)
 	    end
             local dvec = rnn_state[opt.seq_length][#init_state]
 
-
             for t=1,opt.seq_length do
                 prediction = clones.extractor[t]:forward({dvec, rnn_state[t][#init_state]})  --the last state is h
-                print (prediction)
                 loss = loss + clones.criterion[t]:forward(prediction, y[{{}, t}])
             end
              
@@ -242,15 +240,18 @@ function eval_split(split_idx, max_batches)
 	    x_char = x_char:float():cuda()
 	end
 	protos.rnn:evaluate() -- just need one clone
+
 	for t = 1, x:size(2) do
-	    local lst = protos.rnn:forward(get_input(x_char, t, rnn_state[0]))
-	    rnn_state[0] = {}
-	    for i=1,#init_state do table.insert(rnn_state[0], lst[i]) end
-	    local dvec = rnn_state[0][#init_state]
-            prediction = protos.extractor:forward({dvec, rnn_state[0][#init_state]})
-            local tok_perp
-            tok_perp = protos.criterion:forward(prediction, y[{{},t}])
-            loss = loss + tok_perp
+	    local lst = protos.rnn:forward(get_input(x_char, t, rnn_state[t-1]))
+	    rnn_state[t] = {}
+	    for i=1,#init_state do table.insert(rnn_state[t], lst[i]) end
+    end
+    local dvec = rnn_state[x:size(2)][#init_state]
+    for t = 1, x:size(2) do
+        prediction = protos.extractor:forward({dvec, rnn_state[t][#init_state]})
+        local tok_perp
+        tok_perp = protos.criterion:forward(prediction, y[{{},t}])
+        loss = loss + tok_perp
 	end
 	loss = loss / x:size(2)
     end    
@@ -287,9 +288,9 @@ function feval(x)
         clones.rnn[t]:training() -- make sure we are in correct mode (this is cheap, sets flag)        
         local lst = clones.rnn[t]:forward(get_input(x_char, t, rnn_state[t-1]))
         rnn_state[t] = {}
-        for i=1,#init_state do 
+        for i=1,#init_state do
             table.insert(rnn_state[t], lst[i])
-        end -- extract the state, without output
+        end -- extract the state
 
         table.insert(hvecs, rnn_state[t][#init_state])
     end
@@ -304,21 +305,16 @@ function feval(x)
 
     loss = loss / opt.seq_length
 
-
     ------------------ backward pass -------------------
     -- initialize gradient at time t to be zeros (there's no influence from future)
 
     local drnn_state = {[opt.seq_length] = clone_list(init_state, true)} -- true also zeros the clones
 
-
     for t=opt.seq_length,1,-1 do
         local doutput_t = clones.criterion[t]:backward(predictions[t], y[{{}, t}])
-        --print (doutput_t)
-        local dhvec_t = clones.extractor[t]:backward(hvecs[t] ,doutput_t) -- this will create two values,since we used CAddTable!
-        --print (dhvec_t)
-        table.insert(drnn_state[t], dhvec_t[1]:add(dhvec_t[2]))
-        local dlst = clones.rnn[t]:backward({x_char[{{},t}], unpack(rnn_state[t-1])}, drnn_state[t])
-        --print (dlst)
+        local dhvec_t = clones.extractor[t]:backward(hvecs[t], doutput_t) -- this will create two values
+        drnn_state[t][#init_state]:add(dhvec_t[1]:add(dhvec_t[2]))
+        local dlst = clones.rnn[t]:backward(get_input(x_char, t, rnn_state[t-1]), drnn_state[t])
         drnn_state[t-1] = {}
         for k,v in pairs(dlst) do
             if k > 1 then -- k == 1 is gradient on x, which we dont need
@@ -409,5 +405,5 @@ end
 --where m is the path to the best-performing model
 
 test_perp = eval_split(3)
-print('Perplexity on test set: ' .. test_perp)
+print('test set: ' .. test_perp)
 

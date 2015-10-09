@@ -47,7 +47,7 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
 	    char_vec = char_vec_layer(inputs[1])
 	    local char_cnn = TDNN.tdnn(length, char_vec_size, feature_maps, kernels)
 	    char_cnn.name = 'cnn' -- change name so we can refer to it later
-            local cnn_output = char_cnn(char_vec)
+        local cnn_output = char_cnn(char_vec)
 	    input_size_L = torch.Tensor(feature_maps):sum()
 	    x = nn.Identity()(cnn_output)
 	
@@ -88,17 +88,6 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
 	table.insert(outputs, next_h)
     end
 
-  -- set up the decoder
-    local top_h = outputs[#outputs]
-    if dropout > 0 then 
-        top_h = nn.Dropout(dropout)(top_h) 
-    else
-        top_h = nn.Identity()(top_h) --to be compatiable with dropout=0 and hsm>1
-    end
-
-    local proj = nn.Linear(rnn_size, word_vocab_size)(top_h)
-    local logsoft = nn.LogSoftMax()(proj)
-    table.insert(outputs, logsoft)
     return nn.gModule(inputs, outputs)
 end
 
