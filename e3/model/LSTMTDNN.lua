@@ -8,7 +8,7 @@ else
 end
 
 function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size, char_vocab_size, char_vec_size,
-	 			     feature_maps, kernels, length, batch_norm, highway_layers)
+	 			     feature_maps, kernels, length, batch_norm)
     -- rnn_size = dimensionality of hidden layers
     -- n = number of layers
     -- dropout = dropout probability
@@ -19,14 +19,12 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
     -- feature_maps = table of feature map sizes for each kernel width
     -- kernels = table of kernel widths
     -- length = max length of a word
-    -- highway_layers = number of highway layers to use, if any
 
     dropout = dropout or 0 
     
     -- there will be 2*n+1 inputs if using words or chars, 
     -- otherwise there will be 2*n + 2 inputs   
     local char_vec_layer,  x, input_size_L, word_vec, char_vec
-    local highway_layers = highway_layers or 0
     local length = length
     local inputs = {}
     table.insert(inputs, nn.Identity()()) -- batch_size x word length (char indices)
@@ -54,11 +52,7 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
 	    if batch_norm == 1 then	
 	        x = nn.BatchNormalization(0)(x)
 	    end
-	    if highway_layers > 0 then
-	        local highway_mlp = HighwayMLP.mlp(input_size_L, highway_layers)
-		highway_mlp.name = 'highway'
-		x = highway_mlp(x)
-	    end
+
 	else 
 	    x = outputs[(L-1)*2] -- prev_h
 	    if dropout > 0 then x = nn.Dropout(dropout)(x) end -- apply dropout, if any

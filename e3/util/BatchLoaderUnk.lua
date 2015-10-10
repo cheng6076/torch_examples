@@ -48,8 +48,6 @@ function BatchLoaderUnk.create(data_dir, batch_size, seq_length, padding, max_wo
           data = data:sub(1, batch_size * seq_length * math.floor(len / (batch_size * seq_length)))
        end
        local ydata = data:clone():bernoulli(0.5)+1
-       --ydata:sub(1,-2):copy(data:sub(2,-1))
-       --ydata[-1] = data[1]
 
        local data_char = torch.zeros(data:size(1), self.max_word_l):long()
        for i = 1, data:size(1) do

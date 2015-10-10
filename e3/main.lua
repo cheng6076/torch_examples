@@ -1,10 +1,6 @@
 --[[
-Trains a word-level or character-level (for inputs) lstm language model
-Predictions are still made at the word-level.
-
 Much of the code is borrowed from the following implementations
 https://github.com/karpathy/char-rnn
-https://github.com/wojzaremba/lstm
 ]]--
 
 require 'torch'
@@ -14,7 +10,6 @@ require 'optim'
 require 'lfs'
 require 'util.Squeeze'
 require 'util.misc'
-require 'autobw'
 BatchLoader = require 'util.BatchLoaderUnk'
 model_utils = require 'util.model_utils'
 
@@ -26,8 +21,7 @@ cmd:text('Options')
 -- data
 cmd:option('-data_dir','data/ptb','data directory. Should contain train.txt/valid.txt/test.txt with input data')
 -- model params
-cmd:option('-rnn_size', 650, 'size of LSTM internal state')
-cmd:option('-highway_layers', 0, 'number of highway layers')
+cmd:option('-rnn_size', 650, 'size of LSTM internal state, dimentionality of document embedding')
 cmd:option('-word_vec_size', 650, 'dimensionality of word embeddings')
 cmd:option('-char_vec_size', 15, 'dimensionality of character embeddings')
 cmd:option('-feature_maps', '{50,100,150,200,200,200,200}', 'number of feature maps in the CNN')
@@ -107,7 +101,6 @@ opt.max_word_l = loader.max_word_l
 -- load model objects. we do this here because of cudnn options
 TDNN = require 'model.TDNN'
 LSTMTDNN = require 'model.LSTMTDNN'
-HighwayMLP = require 'model.HighwayMLP'
 
 -- make sure output directory exists
 if not path.exists(opt.checkpoint_dir) then lfs.mkdir(opt.checkpoint_dir) end
@@ -127,7 +120,7 @@ if retrain then
 else
     protos.rnn = LSTMTDNN.lstmtdnn(opt.rnn_size, opt.num_layers, opt.dropout, #loader.idx2word, 
 				opt.word_vec_size, #loader.idx2char, opt.char_vec_size, opt.feature_maps, 
-				opt.kernels, loader.max_word_l, opt.batch_norm, opt.highway_layers)
+				opt.kernels, loader.max_word_l, opt.batch_norm)
     print (opt.rnn_size)    
     local d = nn.Identity()()
     local s = nn.Identity()()
@@ -227,8 +220,7 @@ function eval_split(split_idx, max_batches)
                 loss = loss + clones.criterion[t]:forward(prediction, y[{{}, t}])
             end
              
-	    -- carry over lstm state, just for language model
-	    rnn_state[0] = rnn_state[#rnn_state]
+
 	end
 	loss = loss / opt.seq_length / n
     else -- full eval on test set
@@ -327,7 +319,7 @@ function feval(x)
 
     ------------------------ misc ----------------------
     -- transfer final state to initial state (BPTT)
-    init_state_global = rnn_state[#rnn_state] -- NOTE: I don't think this needs to be a clone, right?
+    init_state_global = rnn_state[#rnn_state]
     
     -- renormalize gradients
     local grad_norm, shrink_factor
@@ -398,12 +390,8 @@ for i = 1, iterations do
     end
 end
 
---evaluate on full test set. this just uses the model from the last epoch
---rather than best-performing model. it is also incredibly inefficient
---because of batch size issues. for faster evaluation, use evaluate.lua, i.e.
---th evaluate.lua -model m
---where m is the path to the best-performing model
+--evaluate on full test set.
 
-test_perp = eval_split(3)
-print('test set: ' .. test_perp)
+test_result = eval_split(3)
+print('test set: ' .. test_result)
 

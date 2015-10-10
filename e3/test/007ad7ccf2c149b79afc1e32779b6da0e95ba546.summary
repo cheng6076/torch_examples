@@ -1,0 +1,18 @@
+http://web.archive.org/web/20150718095450id_/http://www.cnn.com/2015/04/09/us/sabra-hummus-recall/
+
+( @entity2 ) @entity1 is recalling 30,000 cases of hummus due to possible contamination with @entity6 , the @entity0 said wednesday . the nationwide recall is voluntary . so far , no illnesses caused by the hummus have been reported . the potential for contamination was discovered when a routine , random sample collected at a @entity14 store on march 30 tested positive for @entity6 monocytogenes . the @entity0 issued a list of the products in the recall . anyone who has purchased any of the items is urged to dispose of or return it to the store for a full refund . listeria monocytogenes can cause serious and sometimes fatal infections in young children , frail or elderly people , and others with weakened immune systems , the @entity0 says . although some people may suffer only short - term symptoms such as high fever , severe headache , nausea , abdominal pain and diarrhea , @entity6 can also cause miscarriages and stillbirths among pregnant women .
+
+( @entity2 ) @entity1 is recalling 30,000 cases of hummus due to possible contamination with @entity6 , the @entity0 said wednesday*****1
+the nationwide recall is voluntary*****0
+so far , no illnesses caused by the hummus have been reported*****1
+the potential for contamination was discovered when a routine , random sample collected at a @entity14 store on march 30 tested positive for @entity6 monocytogenes*****1
+the @entity0 issued a list of the products in the recall*****0
+anyone who has purchased any of the items is urged to dispose of or return it to the store for a full refund*****0
+listeria monocytogenes can cause serious and sometimes fatal infections in young children , frail or elderly people , and others with weakened immune systems , the @entity0 says*****0
+although some people may suffer only short - term symptoms such as high fever , severe headache , nausea , abdominal pain and diarrhea , @entity6 can also cause miscarriages and stillbirths among pregnant women .*****0
+
+@entity2:CNN
+@entity1:Sabra Dipping Co.
+@entity0:FDA
+@entity6:Listeria
+@entity14:Michigan
