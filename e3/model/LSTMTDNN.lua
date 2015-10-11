@@ -24,7 +24,7 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
     
     -- there will be 2*n+1 inputs if using words or chars, 
     -- otherwise there will be 2*n + 2 inputs   
-    local char_vec_layer,  x, input_size_L, word_vec, char_vec
+    local char_vec_layer,  x, input_size_L, char_vec
     local length = length
     local inputs = {}
     table.insert(inputs, nn.Identity()()) -- batch_size x word length (char indices)
