@@ -1,7 +1,4 @@
---[[
-Much of the code is borrowed from the following implementations
-https://github.com/karpathy/char-rnn
-]]--
+-- neuralsum
 
 require 'torch'
 require 'nn'
@@ -10,7 +7,7 @@ require 'optim'
 require 'lfs'
 require 'util.Squeeze'
 require 'util.misc'
-BatchLoader = require 'util.BatchLoaderUnk'
+BatchLoader = require 'util.b'
 model_utils = require 'util.model_utils'
 
 local stringx = require('pl.stringx')
@@ -21,9 +18,9 @@ cmd:text('Options')
 -- data
 cmd:option('-data_dir','data/ptb','data directory. Should contain train.txt/valid.txt/test.txt with input data')
 -- model params
-cmd:option('-rnn_size', 650, 'size of LSTM internal state, dimentionality of document embedding')
-cmd:option('-word_vec_size', 650, 'dimensionality of word embeddings')
-cmd:option('-char_vec_size', 15, 'dimensionality of character embeddings')
+cmd:option('-rnn_size', 150, 'size of LSTM internal state, dimentionality of document embedding')
+cmd:option('-sentence_vec_size', 150, 'dimensionality of sentence embeddings')
+cmd:option('-word_vec_size', 15, 'dimensionality of word embeddings')
 cmd:option('-feature_maps', '{50,100,150,200,200,200,200}', 'number of feature maps in the CNN')
 cmd:option('-kernels', '{1,2,3,4,5,6,7}', 'conv net kernel widths')
 cmd:option('-num_layers', 1, 'number of layers in the LSTM')
@@ -34,20 +31,20 @@ cmd:option('-learning_rate_decay',0.5,'learning rate decay')
 cmd:option('-decay_when',1,'decay if validation perplexity does not improve by more than this much')
 cmd:option('-param_init', 0.05, 'initialize parameters at')
 cmd:option('-batch_norm', 0, 'use batch normalization over input embeddings (1=yes)')
-cmd:option('-seq_length',35,'number of timesteps to unroll for')
 cmd:option('-batch_size',20,'number of sequences to train on in parallel')
 cmd:option('-max_epochs',25,'number of full passes through the training data')
 cmd:option('-max_grad_norm',5,'normalize gradients at')
-cmd:option('-max_word_l',50,'maximum word length')
+cmd:option('-max_sentence_l',20,'maximum sentence length')
+cmd:option('-max_document_l',10,'maximum document length')
 cmd:option('-threads', 16, 'number of threads') 
 -- bookkeeping
 cmd:option('-seed',3435,'torch manual random number generator seed')
-cmd:option('-print_every',100,'how many steps/minibatches between printing out the loss')
+cmd:option('-print_every',5,'how many steps/minibatches between printing out the loss')
 cmd:option('-save_every', 1, 'save every n epochs')
 cmd:option('-checkpoint_dir', 'cv', 'output directory where checkpoints get written')
-cmd:option('-savefile','char','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
+cmd:option('-savefile','word','filename to autosave the checkpont to. Will be inside checkpoint_dir/')
 cmd:option('-checkpoint', 'checkpoint.t7', 'start from a checkpoint if a valid checkpoint.t7 file is given')
-cmd:option('-EOS', '', '<EOS> symbol. should be a single unused character (like +) for PTB and blank for others')
+cmd:option('-EOS', '', '<EOS> symbol. should be a single unused word (like +) for PTB and blank for others')
 -- GPU/CPU
 cmd:option('-gpuid', -1,'which gpu to use. -1 = use CPU')
 cmd:option('-cudnn', 0,'use cudnn (1=yes). this should greatly speed up convolutions')
@@ -92,11 +89,12 @@ if opt.cudnn == 1 then
 end
 
 -- create the data loader class
-loader = BatchLoader.create(opt.data_dir, opt.batch_size, opt.seq_length, opt.padding, opt.max_word_l)
-print('Word vocab size: ' .. #loader.idx2word .. ', Char vocab size: ' .. #loader.idx2char
-	    .. ', Max word length (incl. padding): ', loader.max_word_l)
-opt.max_word_l = loader.max_word_l
-
+loader = BatchLoader.create(opt.batch_size, opt.padding, opt.max_sentence_l, opt.max_document_l)
+print('Word vocab size: ' .. #loader.idx2word)
+opt.max_sentence_l = loader.max_sentence_l
+opt.max_document_l = loader.max_document_l
+opt.seq_length = opt.max_document_l
+--print (opt.max_sentence_l)
 
 -- load model objects. we do this here because of cudnn options
 TDNN = require 'model.TDNN'
@@ -118,9 +116,9 @@ print('creating an LSTM-CNN with ' .. opt.num_layers .. ' layers')
 if retrain then
     protos = checkpoint.protos
 else
-    protos.rnn = LSTMTDNN.lstmtdnn(opt.rnn_size, opt.num_layers, opt.dropout, #loader.idx2word, 
-				opt.word_vec_size, #loader.idx2char, opt.char_vec_size, opt.feature_maps, 
-				opt.kernels, loader.max_word_l, opt.batch_norm)
+    protos.rnn = LSTMTDNN.lstmtdnn(opt.rnn_size, opt.num_layers, opt.dropout,
+				opt.sentence_vec_size, #loader.idx2word, opt.word_vec_size, opt.feature_maps,
+				opt.kernels, loader.max_sentence_l, opt.batch_norm)
     print (opt.rnn_size)    
     local d = nn.Identity()()
     local s = nn.Identity()()
@@ -159,8 +157,8 @@ end
 function get_layer(layer)
     local tn = torch.typename(layer)
     if layer.name ~= nil then
-	if layer.name == 'char_vecs' then
-	    char_vecs = layer
+	if layer.name == 'word_vecs' then
+	    word_vecs = layer
 	elseif layer.name == 'cnn' then
 	    cnn = layer
 	end
@@ -176,10 +174,10 @@ for name,proto in pairs(protos) do
     clones[name] = model_utils.clone_many_times(proto, opt.seq_length, not proto.parameters)
 end
 
--- this returns chars at time t, previous c, previous h
-function get_input(x_char, t, prev_states)
+-- this returns words at time t, previous c, previous h
+function get_input(x_word, t, prev_states)
     local u = {}
-    table.insert(u, x_char[{{},t}])
+    table.insert(u, x_word[{{},t}])
     for i = 1, #prev_states do table.insert(u, prev_states[i]) end
     return u
 end
@@ -197,17 +195,16 @@ function eval_split(split_idx, max_batches)
     if split_idx<=2 then -- batch eval        
 	for i = 1,n do -- iterate over batches in the split
 	    -- fetch a batch
-	    local x, y, x_char = loader:next_batch(split_idx)
+	    local x_word, y = loader:next_batch(split_idx)
 	    if opt.gpuid >= 0 then -- ship the input arrays to GPU
 		-- have to convert to float because integers can't be cuda()'d
-		x = x:float():cuda()
+		x_word = x_word:float():cuda()
 		y = y:float():cuda()
-		x_char = x_char:float():cuda()
 	    end
 	    -- forward pass
 	    for t=1,opt.seq_length do
 		clones.rnn[t]:evaluate() -- for dropout proper functioning
-		local lst = clones.rnn[t]:forward(get_input(x_char, t, rnn_state[t-1]))
+		local lst = clones.rnn[t]:forward(get_input(x_word, t, rnn_state[t-1]))
 		rnn_state[t] = {}
 		        for i=1,#init_state do
                     table.insert(rnn_state[t], lst[i])
@@ -224,17 +221,16 @@ function eval_split(split_idx, max_batches)
 	end
 	loss = loss / opt.seq_length / n
     else -- full eval on test set
-        local x, y, x_char = loader:next_batch(split_idx)
+        local x_word, y = loader:next_batch(split_idx)
 	if opt.gpuid >= 0 then -- ship the input arrays to GPU
 	    -- have to convert to float because integers can't be cuda()'d
-	    x = x:float():cuda()
 	    y = y:float():cuda()
-	    x_char = x_char:float():cuda()
+	    x_word = x_word:float():cuda()
 	end
 	protos.rnn:evaluate() -- just need one clone
 
 	for t = 1, x:size(2) do
-	    local lst = protos.rnn:forward(get_input(x_char, t, rnn_state[t-1]))
+	    local lst = protos.rnn:forward(get_input(x_word, t, rnn_state[t-1]))
 	    rnn_state[t] = {}
 	    for i=1,#init_state do table.insert(rnn_state[t], lst[i]) end
     end
@@ -261,13 +257,12 @@ function feval(x)
     grad_params:zero()
     ------------------ get minibatch -------------------
 
-    local x, y, x_char = loader:next_batch(1) --from train
+    local x_word, y = loader:next_batch(1) --from train
 
     if opt.gpuid >= 0 then -- ship the input arrays to GPU
         -- have to convert to float because integers can't be cuda()'d
-        x = x:float():cuda()
+        x_word = x:float():cuda()
         y = y:float():cuda()
-	x_char = x_char:float():cuda()
     end
     ------------------- forward pass -------------------
 
@@ -278,7 +273,7 @@ function feval(x)
 
     for t=1,opt.seq_length do
         clones.rnn[t]:training() -- make sure we are in correct mode (this is cheap, sets flag)        
-        local lst = clones.rnn[t]:forward(get_input(x_char, t, rnn_state[t-1]))
+        local lst = clones.rnn[t]:forward(get_input(x_word, t, rnn_state[t-1]))
         rnn_state[t] = {}
         for i=1,#init_state do
             table.insert(rnn_state[t], lst[i])
@@ -306,7 +301,7 @@ function feval(x)
         local doutput_t = clones.criterion[t]:backward(predictions[t], y[{{}, t}])
         local dhvec_t = clones.extractor[t]:backward(hvecs[t], doutput_t) -- this will create two values
         drnn_state[t][#init_state]:add(dhvec_t[1]:add(dhvec_t[2]))
-        local dlst = clones.rnn[t]:backward(get_input(x_char, t, rnn_state[t-1]), drnn_state[t])
+        local dlst = clones.rnn[t]:backward(get_input(x_word, t, rnn_state[t-1]), drnn_state[t])
         drnn_state[t-1] = {}
         for k,v in pairs(dlst) do
             if k > 1 then -- k == 1 is gradient on x, which we dont need
@@ -338,16 +333,16 @@ train_losses = {}
 val_losses = {}
 lr = opt.learning_rate -- starting learning rate which will be decayed
 local iterations = opt.max_epochs * loader.split_sizes[1]
-if char_vecs ~= nil then char_vecs.weight[1]:zero() end -- zero-padding vector is always zero
+if wor_vecs ~= nil then word_vecs.weight[1]:zero() end -- zero-padding vector is always zero
 for i = 1, iterations do
 
     local epoch = i / loader.split_sizes[1]
     local timer = torch.Timer()
     local time = timer:time().real
     train_loss = feval(params) -- fwd/backprop and update params
-    if char_vecs ~= nil then -- zero-padding vector is always zero
-        char_vecs.weight[1]:zero() 
-        char_vecs.gradWeight[1]:zero()
+    if word_vecs ~= nil then -- zero-padding vector is always zero
+        word_vecs.weight[1]:zero()
+        word_vecs.gradWeight[1]:zero()
     end 
     train_losses[i] = train_loss
 
@@ -366,7 +361,7 @@ for i = 1, iterations do
         checkpoint.val_losses = val_losses
         checkpoint.i = i
         checkpoint.epoch = epoch
-        checkpoint.vocab = {loader.idx2word, loader.word2idx, loader.idx2char, loader.char2idx}
+        checkpoint.vocab = {loader.idx2word, loader.word2idx}
 	    checkpoint.lr = lr
         print('saving checkpoint to ' .. savefile)
         if epoch == opt.max_epochs or epoch % opt.save_every == 0 then

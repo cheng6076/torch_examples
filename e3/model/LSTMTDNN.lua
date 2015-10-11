@@ -7,29 +7,26 @@ else
     LookupTable = nn.LookupTableGPU
 end
 
-function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size, char_vocab_size, char_vec_size,
+function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, sentence_vec_size, word_vocab_size, word_vec_size,
 	 			     feature_maps, kernels, length, batch_norm)
     -- rnn_size = dimensionality of hidden layers
     -- n = number of layers
     -- dropout = dropout probability
-    -- word_vocab_size = num words in the vocab    
+    -- sentence_vec_size = dimensionality of word embeddings
+    -- word_vocab_size = num words in the vocab
     -- word_vec_size = dimensionality of word embeddings
-    -- char_vocab_size = num chars in the character vocab
-    -- char_vec_size = dimensionality of char embeddings
     -- feature_maps = table of feature map sizes for each kernel width
     -- kernels = table of kernel widths
-    -- length = max length of a word
+    -- length = max length of a sentence
 
     dropout = dropout or 0 
-    
-    -- there will be 2*n+1 inputs if using words or chars, 
-    -- otherwise there will be 2*n + 2 inputs   
-    local char_vec_layer,  x, input_size_L, char_vec
+
+    local word_vec_layer,  x, input_size_L, word_vec
     local length = length
     local inputs = {}
-    table.insert(inputs, nn.Identity()()) -- batch_size x word length (char indices)
-    char_vec_layer = LookupTable(char_vocab_size, char_vec_size)
-    char_vec_layer.name = 'char_vecs' -- change name so we can refer to it easily later
+    table.insert(inputs, nn.Identity()()) -- batch_size x sentence length
+    word_vec_layer = LookupTable(word_vocab_size, word_vec_size)
+    word_vec_layer.name = 'word_vecs' -- change name so we can refer to it easily later
     
     for L = 1,n do
       table.insert(inputs, nn.Identity()()) -- prev_c[L]
@@ -37,15 +34,15 @@ function LSTMTDNN.lstmtdnn(rnn_size, n, dropout, word_vocab_size, word_vec_size,
     end
     local outputs = {}
     for L = 1,n do
-    	-- c,h from previous timesteps. offsets depend on if we are using both word/chars
+    	-- c,h from previous timesteps. 
 	local prev_h = inputs[L*2+1]
 	local prev_c = inputs[L*2]
 	-- the input to this layer
 	if L == 1 then
-	    char_vec = char_vec_layer(inputs[1])
-	    local char_cnn = TDNN.tdnn(length, char_vec_size, feature_maps, kernels)
-	    char_cnn.name = 'cnn' -- change name so we can refer to it later
-        local cnn_output = char_cnn(char_vec)
+	    word_vec = word_vec_layer(inputs[1])
+	    local word_cnn = TDNN.tdnn(length, word_vec_size, feature_maps, kernels)
+	    word_cnn.name = 'cnn' -- change name so we can refer to it later
+        local cnn_output = word_cnn(word_vec)
 	    input_size_L = torch.Tensor(feature_maps):sum()
 	    x = nn.Identity()(cnn_output)
 	
