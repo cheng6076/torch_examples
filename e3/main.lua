@@ -261,7 +261,7 @@ function feval(x)
 
     if opt.gpuid >= 0 then -- ship the input arrays to GPU
         -- have to convert to float because integers can't be cuda()'d
-        x_word = x:float():cuda()
+        x_word = x_word:float():cuda()
         y = y:float():cuda()
     end
     ------------------- forward pass -------------------
